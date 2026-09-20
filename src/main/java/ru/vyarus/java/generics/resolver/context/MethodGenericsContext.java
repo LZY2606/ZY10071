@@ -1,5 +1,7 @@
 package ru.vyarus.java.generics.resolver.context;
 
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
+import ru.vyarus.java.generics.resolver.error.GenericsException;
 import ru.vyarus.java.generics.resolver.util.GenericsResolutionUtils;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
@@ -30,7 +32,13 @@ public class MethodGenericsContext extends GenericsContext {
     private Map<String, Type> allGenerics;
 
     public MethodGenericsContext(final GenericsInfo genericsInfo, final Method method, final GenericsContext root) {
+        this(genericsInfo, method, root, ResolutionTracer.NONE);
+    }
+
+    MethodGenericsContext(final GenericsInfo genericsInfo, final Method method, final GenericsContext root,
+                          final ResolutionTracer tracer) {
         super(genericsInfo, method.getDeclaringClass(), root);
+        this.tracer = tracer;
         this.meth = method;
         initGenerics();
     }
@@ -88,7 +96,17 @@ public class MethodGenericsContext extends GenericsContext {
      * @see #resolveClass(java.lang.reflect.Type)
      */
     public Class<?> resolveReturnClass() {
-        return GenericsUtils.getReturnClass(meth, contextGenerics());
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                tracer.readType(meth.getGenericReturnType());
+            }
+            final Class<?> res = GenericsUtils.getReturnClass(meth, contextGenerics(), tracer);
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -109,7 +127,20 @@ public class MethodGenericsContext extends GenericsContext {
      * @see #resolveParametersTypes()
      */
     public List<Class<?>> resolveParameters() {
-        return GenericsUtils.resolveClasses(meth.getGenericParameterTypes(), contextGenerics());
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                for (Type type : meth.getGenericParameterTypes()) {
+                    tracer.readType(type);
+                }
+            }
+            final List<Class<?>> res = GenericsUtils.resolveClasses(
+                    meth.getGenericParameterTypes(), contextGenerics(), tracer);
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -129,7 +160,20 @@ public class MethodGenericsContext extends GenericsContext {
      * @see #resolveParameters()
      */
     public List<Type> resolveParametersTypes() {
-        return Arrays.asList(GenericsUtils.resolveTypeVariables(meth.getGenericParameterTypes(), contextGenerics()));
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                for (Type type : meth.getGenericParameterTypes()) {
+                    tracer.readType(type);
+                }
+            }
+            final List<Type> res = Arrays.asList(GenericsUtils.resolveTypeVariables(
+                    meth.getGenericParameterTypes(), contextGenerics(), tracer));
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -209,7 +253,18 @@ public class MethodGenericsContext extends GenericsContext {
      * @return resolved generic classes or empty list if type does not use generics
      */
     public List<Class<?>> resolveReturnTypeGenerics() {
-        return GenericsUtils.resolveGenericsOf(meth.getGenericReturnType(), contextGenerics());
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                tracer.readType(meth.getGenericReturnType());
+            }
+            final List<Class<?>> res = GenericsUtils.resolveGenericsOf(
+                    meth.getGenericReturnType(), contextGenerics(), tracer);
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -321,7 +376,7 @@ public class MethodGenericsContext extends GenericsContext {
         final TypeVariable<Method>[] methodGenerics = meth.getTypeParameters();
         final boolean hasMethodGenerics = methodGenerics.length > 0;
         this.methodGenerics = hasMethodGenerics
-                ? GenericsResolutionUtils.resolveDirectRawGenerics(meth, allTypeGenerics)
+                ? GenericsResolutionUtils.resolveDirectRawGenerics(meth, allTypeGenerics, tracer)
                 : Collections.<String, Type>emptyMap();
         // important to fill it in time of resolution because method generics could be dependant
         if (hasMethodGenerics) {

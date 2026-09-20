@@ -2,6 +2,7 @@ package ru.vyarus.java.generics.resolver.util;
 
 import ru.vyarus.java.generics.resolver.context.GenericsContext;
 import ru.vyarus.java.generics.resolver.context.GenericsInfo;
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
 import ru.vyarus.java.generics.resolver.util.map.EmptyGenericsMap;
 
 import java.lang.reflect.Type;
@@ -40,7 +41,7 @@ public final class GenericInfoUtils {
     public static GenericsInfo create(final Class<?> type, final Class<?>... ignoreClasses) {
         // root class may contain generics or it may be inner class
         final LinkedHashMap<String, Type> generics = GenericsResolutionUtils.resolveRawGenerics(type);
-        return create(type, generics, null, ignoreClasses);
+        return create(type, generics, null, ResolutionTracer.NONE, ignoreClasses);
     }
 
     /**
@@ -58,18 +59,20 @@ public final class GenericInfoUtils {
      */
     public static GenericsInfo create(
             final GenericsContext context, final Type type, final Class<?>... ignoreClasses) {
+        final ResolutionTracer tracer = context.getTracer();
         // root generics are required only to properly solve type
         final Map<String, Type> rootGenerics = context.visibleGenericsMap();
         // first step: solve type to replace transitive generics with direct values
-        final Type actual = GenericsUtils.resolveTypeVariables(type, rootGenerics);
+        final Type actual = GenericsUtils.resolveTypeVariables(type, rootGenerics, tracer);
         final Class<?> target = context.resolveClass(actual);
 
-        LinkedHashMap<String, Type> generics = GenericsResolutionUtils.resolveGenerics(actual, rootGenerics);
+        LinkedHashMap<String, Type> generics = GenericsResolutionUtils.resolveGenerics(
+                actual, rootGenerics, tracer);
         generics = GenericsResolutionUtils
-                .fillOuterGenerics(actual, generics, context.getGenericsInfo().getTypesMap());
+                .fillOuterGenerics(actual, generics, context.getGenericsInfo().getTypesMap(), tracer);
         return create(target, generics,
                 // store possible owner types from parent context
-                usePossiblyOwnerGenerics(target, context.getGenericsInfo()), ignoreClasses);
+                usePossiblyOwnerGenerics(target, context.getGenericsInfo()), tracer, ignoreClasses);
     }
 
     /**
@@ -102,10 +105,11 @@ public final class GenericInfoUtils {
                                       final Type type,
                                       final Class<?> asType,
                                       final Class<?>... ignoreClasses) {
+        final ResolutionTracer tracer = context.getTracer();
         // root generics are required only to properly solve type
         final Map<String, Type> rootGenerics = context.visibleGenericsMap();
         // first step: solve type to replace transitive generics with direct values
-        final Type actual = GenericsUtils.resolveTypeVariables(type, rootGenerics);
+        final Type actual = GenericsUtils.resolveTypeVariables(type, rootGenerics, tracer);
         final Class<?> middleType = context.resolveClass(actual);
         if (!middleType.isAssignableFrom(asType)) {
             throw new IllegalArgumentException(String.format("Requested type %s is not a subtype of %s",
@@ -113,11 +117,12 @@ public final class GenericInfoUtils {
         }
 
         // known middle type
-        LinkedHashMap<String, Type> typeGenerics = GenericsResolutionUtils.resolveGenerics(actual, rootGenerics);
+        LinkedHashMap<String, Type> typeGenerics = GenericsResolutionUtils.resolveGenerics(
+                actual, rootGenerics, tracer);
         final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics = new HashMap<>();
         // field could be declared as (Outer<String>.Inner field) and already contain actual outer generics
         knownGenerics.put(middleType, GenericsResolutionUtils
-                .fillOuterGenerics(actual, typeGenerics, context.getGenericsInfo().getTypesMap()));
+                .fillOuterGenerics(actual, typeGenerics, context.getGenericsInfo().getTypesMap(), tracer));
         if (TypeUtils.isInner(middleType)) {
             // remember possibly specified outer generics (they were already resolved above)
             knownGenerics.put((Class) TypeUtils.getOuter(middleType), new LinkedHashMap<>(
@@ -136,8 +141,8 @@ public final class GenericInfoUtils {
         typeGenerics = GenericsResolutionUtils
                 .fillOuterGenerics(asType, typeGenerics, knownGenerics.size() > 1
                         // if known middle type is inner class then owner already filled
-                        ? knownGenerics : context.getGenericsInfo().getTypesMap());
-        return create(asType, typeGenerics, knownGenerics, ignoreClasses);
+                        ? knownGenerics : context.getGenericsInfo().getTypesMap(), tracer);
+        return create(asType, typeGenerics, knownGenerics, tracer, ignoreClasses);
     }
 
 
@@ -145,12 +150,13 @@ public final class GenericInfoUtils {
             final Class type,
             final LinkedHashMap<String, Type> rootGenerics,
             final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics,
+            final ResolutionTracer tracer,
             final Class<?>... ignoreClasses) {
 
         final Map<Class<?>, LinkedHashMap<String, Type>> generics = GenericsResolutionUtils.resolve(type,
                 rootGenerics,
                 knownGenerics == null ? Collections.<Class<?>, LinkedHashMap<String, Type>>emptyMap() : knownGenerics,
-                Arrays.asList(ignoreClasses));
+                Arrays.asList(ignoreClasses), tracer);
         return new GenericsInfo(type, generics, ignoreClasses);
     }
 

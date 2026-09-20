@@ -1,5 +1,7 @@
 package ru.vyarus.java.generics.resolver.context;
 
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
+import ru.vyarus.java.generics.resolver.error.GenericsException;
 import ru.vyarus.java.generics.resolver.util.GenericsResolutionUtils;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
@@ -33,7 +35,15 @@ public class ConstructorGenericsContext extends GenericsContext {
     public ConstructorGenericsContext(final GenericsInfo genericsInfo,
                                       final Constructor constructor,
                                       final GenericsContext root) {
+        this(genericsInfo, constructor, root, ResolutionTracer.NONE);
+    }
+
+    ConstructorGenericsContext(final GenericsInfo genericsInfo,
+                               final Constructor constructor,
+                               final GenericsContext root,
+                               final ResolutionTracer tracer) {
         super(genericsInfo, constructor.getDeclaringClass(), root);
+        this.tracer = tracer;
         this.ctor = constructor;
         initGenerics();
     }
@@ -93,7 +103,20 @@ public class ConstructorGenericsContext extends GenericsContext {
      * @see #resolveParametersTypes()
      */
     public List<Class<?>> resolveParameters() {
-        return GenericsUtils.resolveClasses(ctor.getGenericParameterTypes(), contextGenerics());
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                for (Type type : ctor.getGenericParameterTypes()) {
+                    tracer.readType(type);
+                }
+            }
+            final List<Class<?>> res = GenericsUtils.resolveClasses(
+                    ctor.getGenericParameterTypes(), contextGenerics(), tracer);
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -113,8 +136,20 @@ public class ConstructorGenericsContext extends GenericsContext {
      * @see #resolveParameters()
      */
     public List<Type> resolveParametersTypes() {
-        return Arrays.asList(GenericsUtils.resolveTypeVariables(
-                ctor.getGenericParameterTypes(), contextGenerics()));
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                for (Type type : ctor.getGenericParameterTypes()) {
+                    tracer.readType(type);
+                }
+            }
+            final List<Type> res = Arrays.asList(GenericsUtils.resolveTypeVariables(
+                    ctor.getGenericParameterTypes(), contextGenerics(), tracer));
+            tracer.result(res);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
+        }
     }
 
     /**
@@ -221,7 +256,7 @@ public class ConstructorGenericsContext extends GenericsContext {
         final TypeVariable<Constructor>[] constrGenerics = ctor.getTypeParameters();
         final boolean hasConstrGenerics = constrGenerics.length > 0;
         this.constructorGenerics = hasConstrGenerics
-                ? GenericsResolutionUtils.resolveDirectRawGenerics(ctor, allTypeGenerics)
+                ? GenericsResolutionUtils.resolveDirectRawGenerics(ctor, allTypeGenerics, tracer)
                 : Collections.<String, Type>emptyMap();
         // important to fill it in time of resolution because constructor generics could be dependant
         if (hasConstrGenerics) {

@@ -1,5 +1,6 @@
 package ru.vyarus.java.generics.resolver.context;
 
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
 import ru.vyarus.java.generics.resolver.util.GenericInfoUtils;
 
 import java.util.ConcurrentModificationException;
@@ -44,6 +45,23 @@ public final class GenericsInfoFactory {
      * @return descriptor for class hierarchy generics substitution
      */
     public static GenericsInfo create(final Class<?> type, final Class<?>... ignoreClasses) {
+        return create(type, ResolutionTracer.NONE, ignoreClasses);
+    }
+
+    /**
+     * Tracing version of {@link #create(Class, Class[])}: cache hit, miss and bypass events are recorded
+     * into provided tracer.
+     *
+     * @param type          finder type to investigate
+     * @param tracer        resolution tracer
+     * @param ignoreClasses list of classes to ignore during inspection (useful to avoid interface clashes)
+     * @return descriptor for class hierarchy generics substitution
+     */
+    public static GenericsInfo create(final Class<?> type, final ResolutionTracer tracer,
+                                      final Class<?>... ignoreClasses) {
+        if (ignoreClasses.length > 0) {
+            tracer.cacheBypassed(type);
+        }
         GenericsInfo descriptor = ignoreClasses.length > 0
                 ? GenericInfoUtils.create(type, ignoreClasses) : CACHE.get(type);
         if (descriptor == null) {
@@ -52,6 +70,7 @@ public final class GenericsInfoFactory {
                 if (CACHE.get(type) != null) {
                     // descriptor could be created while thread wait for lock
                     descriptor = CACHE.get(type);
+                    tracer.cacheHit(type);
                 } else {
                     descriptor = GenericInfoUtils.create(type);
                     if (isCacheEnabled()) {
@@ -60,11 +79,16 @@ public final class GenericsInfoFactory {
                             throw new ConcurrentModificationException("Descriptor already present in cache");
                         }
                         CACHE.put(type, descriptor);
+                        tracer.cacheMiss(type, true);
+                    } else {
+                        tracer.cacheMiss(type, false);
                     }
                 }
             } finally {
                 LOCK.unlock();
             }
+        } else if (ignoreClasses.length == 0) {
+            tracer.cacheHit(type);
         }
         return descriptor;
     }

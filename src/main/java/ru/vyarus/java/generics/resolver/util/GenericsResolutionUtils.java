@@ -1,6 +1,7 @@
 package ru.vyarus.java.generics.resolver.util;
 
 import ru.vyarus.java.generics.resolver.context.container.WildcardTypeImpl;
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
 import ru.vyarus.java.generics.resolver.error.GenericsResolutionException;
 import ru.vyarus.java.generics.resolver.error.IncompatibleTypesException;
 import ru.vyarus.java.generics.resolver.error.UnknownGenericException;
@@ -18,7 +19,8 @@ import java.util.*;
  * @since 11.05.2018
  */
 // LinkedHashMap used instead of usual map to avoid accidental simple map usage (order is important!)
-@SuppressWarnings({"PMD.LooseCoupling", "PMD.GodClass", "checkstyle:IllegalIdentifierName"})
+@SuppressWarnings({"PMD.LooseCoupling", "PMD.GodClass", "PMD.TooManyMethods",
+        "checkstyle:IllegalIdentifierName"})
 public final class GenericsResolutionUtils {
 
     private static final String GROOVY_OBJECT = "GroovyObject";
@@ -108,10 +110,31 @@ public final class GenericsResolutionUtils {
             final LinkedHashMap<String, Type> rootGenerics,
             final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics,
             final List<Class<?>> ignoreClasses) {
+        return resolve(type, rootGenerics, knownGenerics, ignoreClasses, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolve(Class, LinkedHashMap, Map, List)}.
+     *
+     * @param type          class to analyze
+     * @param rootGenerics  resolved root type generics (including owner type generics); must not be null!
+     * @param knownGenerics type generics known before analysis (some middle class generics are known) and
+     *                      could contain possible outer generics (types for sure not included in resolving type
+     *                      hierarchy); must not be null, but could be empty map
+     * @param ignoreClasses classes to ignore during analysis
+     * @param tracer        resolution tracer
+     * @return resolved generics for all types in class hierarchy
+     */
+    public static Map<Class<?>, LinkedHashMap<String, Type>> resolve(
+            final Class<?> type,
+            final LinkedHashMap<String, Type> rootGenerics,
+            final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics,
+            final List<Class<?>> ignoreClasses,
+            final ResolutionTracer tracer) {
         final Map<Class<?>, LinkedHashMap<String, Type>> generics = new HashMap<>();
         generics.put(type, rootGenerics);
         try {
-            analyzeType(generics, type, knownGenerics, ignoreClasses);
+            analyzeType(generics, type, knownGenerics, ignoreClasses, tracer);
         } catch (Exception ex) {
             throw new GenericsResolutionException(type, rootGenerics, knownGenerics, ex);
         }
@@ -135,11 +158,25 @@ public final class GenericsResolutionUtils {
      */
     public static LinkedHashMap<String, Type> resolveGenerics(final Type type,
                                                               final Map<String, Type> generics) {
+        return resolveGenerics(type, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveGenerics(Type, Map)}.
+     *
+     * @param type     type to resolve generics of
+     * @param generics generics of context class
+     * @param tracer   resolution tracer
+     * @return resolved generics of parameterized type or empty map
+     */
+    public static LinkedHashMap<String, Type> resolveGenerics(final Type type,
+                                                              final Map<String, Type> generics,
+                                                              final ResolutionTracer tracer) {
         Type actual = type;
         if (type instanceof ParameterizedType) {
             // if parameterized type is not correct (contain only raw type without type arguments
             // (possible for instance types) then this call could unwrap it to pure class
-            actual = GenericsUtils.resolveTypeVariables(type, generics);
+            actual = GenericsUtils.resolveTypeVariables(type, generics, tracer);
         }
         final LinkedHashMap<String, Type> res;
         if (actual instanceof ParameterizedType) {
@@ -149,14 +186,14 @@ public final class GenericsResolutionUtils {
             final TypeVariable[] genericNames = target.getTypeParameters();
 
             // inner class can use outer class generics
-            res = fillOuterGenerics(actual, new LinkedHashMap<>(), null);
+            res = fillOuterGenerics(actual, new LinkedHashMap<>(), null, tracer);
 
             final int cnt = genericNames.length;
             for (int i = 0; i < cnt; i++) {
                 res.put(genericNames[i].getName(), genericTypes[i]);
             }
         } else {
-            res = resolveRawGenerics(GenericsUtils.resolveClass(actual, generics));
+            res = resolveRawGenerics(GenericsUtils.resolveClass(actual, generics, tracer), tracer);
         }
         return res;
     }
@@ -173,8 +210,20 @@ public final class GenericsResolutionUtils {
      * @see #resolveDirectRawGenerics(Class) to resolve without outer type
      */
     public static LinkedHashMap<String, Type> resolveRawGenerics(final Class<?> type) {
+        return resolveRawGenerics(type, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveRawGenerics(Class)}.
+     *
+     * @param type   class to analyze generics for
+     * @param tracer resolution tracer
+     * @return resolved generics (including outer class generics) or empty map if not generics used
+     */
+    public static LinkedHashMap<String, Type> resolveRawGenerics(final Class<?> type,
+                                                                 final ResolutionTracer tracer) {
         // inner class can use outer class generics
-        return fillOuterGenerics(type, resolveDirectRawGenerics(type), null);
+        return fillOuterGenerics(type, resolveDirectRawGenerics(type, tracer), null, tracer);
     }
 
     /**
@@ -190,7 +239,19 @@ public final class GenericsResolutionUtils {
      * @see #resolveRawGenerics(Class) to include outer type generics
      */
     public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Class<?> type) {
-        return resolveRawGenericsChain(type.getTypeParameters(), null);
+        return resolveDirectRawGenerics(type, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveDirectRawGenerics(Class)}.
+     *
+     * @param type   class to analyze generics for
+     * @param tracer resolution tracer
+     * @return resolved generics or empty map if not generics used
+     */
+    public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Class<?> type,
+                                                                       final ResolutionTracer tracer) {
+        return resolveRawGenericsChain(type.getTypeParameters(), null, tracer);
     }
 
     /**
@@ -204,7 +265,21 @@ public final class GenericsResolutionUtils {
      */
     public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Method method,
                                                                        final Map<String, Type> generics) {
-        return resolveRawGenericsChain(method.getTypeParameters(), generics);
+        return resolveDirectRawGenerics(method, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveDirectRawGenerics(Method, Map)}.
+     *
+     * @param method   method to analyze generics for
+     * @param generics context class generics (which could be used in method generics declarations)
+     * @param tracer   resolution tracer
+     * @return resolved generics or empty map if method does not contain generics
+     */
+    public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Method method,
+                                                                       final Map<String, Type> generics,
+                                                                       final ResolutionTracer tracer) {
+        return resolveRawGenericsChain(method.getTypeParameters(), generics, tracer);
     }
 
     /**
@@ -218,7 +293,21 @@ public final class GenericsResolutionUtils {
      */
     public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Constructor constructor,
                                                                        final Map<String, Type> generics) {
-        return resolveRawGenericsChain(constructor.getTypeParameters(), generics);
+        return resolveDirectRawGenerics(constructor, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveDirectRawGenerics(Constructor, Map)}.
+     *
+     * @param constructor constructor to analyze generics for
+     * @param generics    context class generics (which could be used in constructor generics declarations)
+     * @param tracer      resolution tracer
+     * @return resolved generics or empty map if constructor does not contain generics
+     */
+    public static LinkedHashMap<String, Type> resolveDirectRawGenerics(final Constructor constructor,
+                                                                       final Map<String, Type> generics,
+                                                                       final ResolutionTracer tracer) {
+        return resolveRawGenericsChain(constructor.getTypeParameters(), generics, tracer);
     }
 
     /**
@@ -235,18 +324,32 @@ public final class GenericsResolutionUtils {
      */
     public static Type resolveRawGeneric(final TypeVariable variable,
                                          final LinkedHashMap<String, Type> generics) {
+        return resolveRawGeneric(variable, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveRawGeneric(TypeVariable, LinkedHashMap)}.
+     *
+     * @param variable generic declaration to analyze
+     * @param generics already resolved generics (on the left of current)
+     * @param tracer   resolution tracer
+     * @return either upper bound class or wildcard with multiple bounds
+     */
+    public static Type resolveRawGeneric(final TypeVariable variable,
+                                         final LinkedHashMap<String, Type> generics,
+                                         final ResolutionTracer tracer) {
         final Type res;
         if (variable.getBounds().length > 1) {
             // case: T extends A & B -->  ? extends A & B
             final List<Type> types = new ArrayList<>();
             for (Type bound : variable.getBounds()) {
                 // replace possible named generics with actual type (for cases like K extends T)
-                final Type actual = GenericsUtils.resolveTypeVariables(bound, generics);
+                final Type actual = GenericsUtils.resolveTypeVariables(bound, generics, tracer);
                 if (actual instanceof WildcardType && ((WildcardType) actual).getUpperBounds().length > 0) {
                     // case: T extends A & B, K extends T & C --> K must be aggregated as ? extends A & B & C
                     // this case is impossible in java, but allowed in groovy
                     types.addAll(Arrays.asList(GenericsUtils
-                            .resolveTypeVariables(((WildcardType) actual).getUpperBounds(), generics)));
+                            .resolveTypeVariables(((WildcardType) actual).getUpperBounds(), generics, tracer)));
                 } else {
                     types.add(actual);
                 }
@@ -265,8 +368,10 @@ public final class GenericsResolutionUtils {
             }
         } else {
             // case: simple generic declaration <T> (implicitly extends Object)
-            res = GenericsUtils.resolveTypeVariables(variable.getBounds()[0], generics);
+            res = GenericsUtils.resolveTypeVariables(variable.getBounds()[0], generics, tracer);
         }
+        // variable narrowed to declaration bound
+        tracer.boundNarrowed(variable, res);
         return res;
     }
 
@@ -299,6 +404,24 @@ public final class GenericsResolutionUtils {
             final Type type,
             final LinkedHashMap<String, Type> generics,
             final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics) {
+        return fillOuterGenerics(type, generics, knownGenerics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #fillOuterGenerics(Type, LinkedHashMap, Map)}.
+     *
+     * @param type          context type
+     * @param generics      resolved type generics
+     * @param knownGenerics map of known middle generics and possibly known outer context (outer context may contain
+     *                      outer class generics declarations). May be null.
+     * @param tracer        resolution tracer
+     * @return actual generics map (incoming map may be default empty map and in this case it must be replaced)
+     */
+    public static LinkedHashMap<String, Type> fillOuterGenerics(
+            final Type type,
+            final LinkedHashMap<String, Type> generics,
+            final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics,
+            final ResolutionTracer tracer) {
         final LinkedHashMap<String, Type> res;
         final Type outer = TypeUtils.getOuter(type);
         if (outer == null) {
@@ -309,16 +432,16 @@ public final class GenericsResolutionUtils {
             if (outer instanceof ParameterizedType) {
                 // outer generics declared in field definition (ignorance required because provided type
                 // may contain unknown outer generics (Outer<B>.Inner field))
-                outerGenerics = resolveGenerics(outer, new IgnoreGenericsMap(generics));
+                outerGenerics = resolveGenerics(outer, new IgnoreGenericsMap(generics), tracer);
             } else {
-                final Class<?> outerType = GenericsUtils.resolveClass(outer, generics);
+                final Class<?> outerType = GenericsUtils.resolveClass(outer, generics, tracer);
                 // either use known generics for outer class or resolve by upper bound
                 outerGenerics = knownGenerics != null && knownGenerics.containsKey(outerType)
                         ? new LinkedHashMap<>(knownGenerics.get(outerType))
-                        : resolveRawGenerics(outerType);
+                        : resolveRawGenerics(outerType, tracer);
             }
             // class may declare generics with the same name and they must not be overridden
-            for (TypeVariable var : GenericsUtils.resolveClass(type, generics).getTypeParameters()) {
+            for (TypeVariable var : GenericsUtils.resolveClass(type, generics, tracer).getTypeParameters()) {
                 outerGenerics.remove(var.getName());
             }
 
@@ -345,7 +468,8 @@ public final class GenericsResolutionUtils {
      */
     @SuppressWarnings("PMD.UseDiamondOperator") // remove after moving to java 8 (bug)
     private static LinkedHashMap<String, Type> resolveRawGenericsChain(final TypeVariable[] declaredGenerics,
-                                                                       final Map<String, Type> generics) {
+                                                                       final Map<String, Type> generics,
+                                                                       final ResolutionTracer tracer) {
         if (declaredGenerics.length == 0) {
             return EmptyGenericsMap.getInstance();
         }
@@ -359,13 +483,13 @@ public final class GenericsResolutionUtils {
         for (TypeVariable variable : declaredGenerics) {
             Type resolved = null;
             try {
-                resolved = resolveRawGeneric(variable, contextGenerics);
+                resolved = resolveRawGeneric(variable, contextGenerics, tracer);
             } catch (UnknownGenericException ex) {
                 // direct cycle case Something<T extends Something<T>>
                 // (failed generic is exactly resolving generic)
                 if (ex.getGenericName().equals(variable.getName())
                         && ex.getGenericSource().equals(variable.getGenericDeclaration())) {
-                    resolved = GenericsUtils.resolveClass(variable.getBounds()[0], contextGenerics);
+                    resolved = GenericsUtils.resolveClass(variable.getBounds()[0], contextGenerics, tracer);
                 } else {
                     // variable will be stored with null to preserve order (without resolution) and resolved later
                     // (inversed declaration order case)
@@ -379,7 +503,7 @@ public final class GenericsResolutionUtils {
         if (!failed.isEmpty()) {
             for (TypeVariable variable : GenericsUtils.orderVariablesForResolution(failed)) {
                 // replacing nulls in map
-                final Type result = resolveRawGeneric(variable, contextGenerics);
+                final Type result = resolveRawGeneric(variable, contextGenerics, tracer);
                 res.put(variable.getName(), result);
                 contextGenerics.put(variable.getName(), result);
             }
@@ -399,11 +523,12 @@ public final class GenericsResolutionUtils {
     private static void analyzeType(final Map<Class<?>, LinkedHashMap<String, Type>> generics,
                                     final Class<?> type,
                                     final Map<Class<?>, LinkedHashMap<String, Type>> knownGenerics,
-                                    final List<Class<?>> ignoreClasses) {
+                                    final List<Class<?>> ignoreClasses,
+                                    final ResolutionTracer tracer) {
         Class<?> supertype = type;
         while (true) {
             for (Type iface : supertype.getGenericInterfaces()) {
-                analyzeInterface(generics, knownGenerics, iface, supertype, ignoreClasses);
+                analyzeInterface(generics, knownGenerics, iface, supertype, ignoreClasses, tracer);
             }
             final Class next = supertype.getSuperclass();
             if (next == null || Object.class == next || ignoreClasses.contains(next)) {
@@ -412,9 +537,9 @@ public final class GenericsResolutionUtils {
             // possibly provided generics (externally)
             final LinkedHashMap<String, Type> nextGenerics = knownGenerics.containsKey(next)
                     ? knownGenerics.get(next)
-                    : analyzeParent(supertype, generics.get(supertype));
+                    : analyzeParent(supertype, generics.get(supertype), tracer);
             generics.put(next,
-                    fillOuterGenerics(next, nextGenerics, knownGenerics));
+                    fillOuterGenerics(next, nextGenerics, knownGenerics, tracer));
             supertype = next;
         }
     }
@@ -433,7 +558,8 @@ public final class GenericsResolutionUtils {
                                          final Map<Class<?>, LinkedHashMap<String, Type>> knownTypes,
                                          final Type iface,
                                          final Class<?> hostType,
-                                         final List<Class<?>> ignoreClasses) {
+                                         final List<Class<?>> ignoreClasses,
+                                         final ResolutionTracer tracer) {
         final Class interfaceType = iface instanceof ParameterizedType
                 ? (Class) ((ParameterizedType) iface).getRawType()
                 : (Class) iface;
@@ -444,7 +570,7 @@ public final class GenericsResolutionUtils {
             } else if (iface instanceof ParameterizedType) {
                 final ParameterizedType parametrization = (ParameterizedType) iface;
                 final LinkedHashMap<String, Type> generics =
-                        resolveGenerics(parametrization, types.get(hostType));
+                        resolveGenerics(parametrization, types.get(hostType), tracer);
 
                 if (types.containsKey(interfaceType)) {
                     // class hierarchy may contain multiple implementations for the same interface
@@ -456,12 +582,12 @@ public final class GenericsResolutionUtils {
                 types.put(interfaceType, generics);
             } else if (interfaceType.getTypeParameters().length > 0) {
                 // root class didn't declare generics
-                types.put(interfaceType, resolveRawGenerics(interfaceType));
+                types.put(interfaceType, resolveRawGenerics(interfaceType, tracer));
             } else if (!GROOVY_OBJECT.equals(interfaceType.getSimpleName())) {
                 // avoid groovy specific interface (all groovy objects implements it)
                 types.put(interfaceType, EmptyGenericsMap.getInstance());
             }
-            analyzeType(types, interfaceType, knownTypes, ignoreClasses);
+            analyzeType(types, interfaceType, knownTypes, ignoreClasses, tracer);
         }
     }
 
@@ -496,15 +622,16 @@ public final class GenericsResolutionUtils {
      * @return resolved parent class generics
      */
     private static LinkedHashMap<String, Type> analyzeParent(final Class type,
-                                                             final Map<String, Type> generics) {
+                                                             final Map<String, Type> generics,
+                                                             final ResolutionTracer tracer) {
         LinkedHashMap<String, Type> res = null;
         final Class parent = type.getSuperclass();
         if (!type.isInterface() && parent != null && parent != Object.class
                 && type.getGenericSuperclass() instanceof ParameterizedType) {
-            res = resolveGenerics(type.getGenericSuperclass(), generics);
+            res = resolveGenerics(type.getGenericSuperclass(), generics, tracer);
         } else if (parent != null && parent.getTypeParameters().length > 0) {
             // root class didn't declare generics
-            res = resolveRawGenerics(parent);
+            res = resolveRawGenerics(parent, tracer);
         }
         return res == null ? EmptyGenericsMap.getInstance() : res;
     }

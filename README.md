@@ -105,5 +105,59 @@ implementation 'ru.vyarus:generics-resolver:3.0.3'
 
 Read [documentation](https://xvik.github.io/generics-resolver/)     
       
+### Resolution trace
+
+Resolution tracing is disabled by default (no overhead: not even an events list is allocated and
+exception stacks are not affected). Enable it on any context to see *why* a type was resolved
+this way (useful for DI frameworks to explain resolution failures):
+
+```java
+GenericsContext context = GenericsResolver.resolve(WildRoot.class).type(WildCase.class);
+context.enableTracing();
+context.resolveFieldType(WildCase.class.getField("upper")); // List<? extends T>
+
+System.out.println(context.getTrace());
+```
+
+Successful resolution output (each line is one event, in actual resolution order):
+
+```
+SCOPE class WildCase<T> {T=Number}
+READ_TYPE List<? extends T>
+SUBSTITUTE T => Number
+NARROW_BOUND ? extends T => Number
+RESULT List<Number>
+```
+
+When resolution fails, the trace recorded before failure is attached to the thrown exception
+(`UnknownGenericException`, `WrongGenericsContextException`, `IncompatibleTypesException` and others):
+
+```java
+try {
+    context.genericType("UNKNOWN");
+} catch (UnknownGenericException ex) {
+    System.out.println(ex.getResolutionTrace());
+}
+```
+
+```
+SCOPE class ExplCase<T> {T=String}
+READ_TYPE T
+SUBSTITUTE T => String
+RESULT String
+ERROR UnknownGenericException: Generic 'UNKNOWN' is not declared on type ...ExplCase
+```
+
+Notes:
+
+* The trace is shared between all contexts derived from the one where tracing was enabled
+  (type/method/constructor/inlying navigations), so the entire resolution process appears
+  in a single ordered trace.
+* Cached `GenericsInfo` descriptors never store traces: different contexts using the same
+  cached descriptor record independent traces (no scope mixing).
+* `ResolutionTrace` and its events are immutable (generics snapshots are unmodifiable copies).
+* Recursive types are rendered with reference numbers (e.g. `#1: Comparable<#1>`)
+  instead of infinite expansion.
+
 ---
 [![java lib generator](http://img.shields.io/badge/Powered%20by-%20Java%20lib%20generator-green.svg?style=flat-square)](https://github.com/xvik/generator-lib-java)

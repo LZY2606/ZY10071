@@ -4,6 +4,7 @@ import ru.vyarus.java.generics.resolver.context.GenericDeclarationScope;
 import ru.vyarus.java.generics.resolver.context.container.ExplicitTypeVariable;
 import ru.vyarus.java.generics.resolver.context.container.ParameterizedTypeImpl;
 import ru.vyarus.java.generics.resolver.context.container.WildcardTypeImpl;
+import ru.vyarus.java.generics.resolver.context.trace.ResolutionTracer;
 import ru.vyarus.java.generics.resolver.error.UnknownGenericException;
 import ru.vyarus.java.generics.resolver.util.map.EmptyGenericsMap;
 import ru.vyarus.java.generics.resolver.util.map.IgnoreGenericsMap;
@@ -74,6 +75,20 @@ public final class GenericsUtils {
     }
 
     /**
+     * Tracing version of {@link #getReturnClass(Method, Map)}.
+     *
+     * @param method   method to analyze
+     * @param generics generics resolution map for method class (will be null for root)
+     * @param tracer   resolution tracer
+     * @return return type class
+     */
+    public static Class<?> getReturnClass(final Method method, final Map<String, Type> generics,
+                                          final ResolutionTracer tracer) {
+        final Type returnType = method.getGenericReturnType();
+        return resolveClass(returnType, generics, tracer);
+    }
+
+    /**
      * If type is a variable, looks actual variable type, if it contains generics.
      * For {@link ParameterizedType} return actual type parameters, for simple class returns raw class generics.
      * <p>
@@ -84,11 +99,24 @@ public final class GenericsUtils {
      * @return type generics array or empty array
      */
     public static Type[] getGenerics(final Type type, final Map<String, Type> generics) {
+        return getGenerics(type, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #getGenerics(Type, Map)}.
+     *
+     * @param type     type to get generics of
+     * @param generics context generics map
+     * @param tracer   resolution tracer
+     * @return type generics array or empty array
+     */
+    public static Type[] getGenerics(final Type type, final Map<String, Type> generics,
+                                     final ResolutionTracer tracer) {
         Type[] res = NO_TYPES;
         Type analyzingType = type;
         if (type instanceof TypeVariable) {
             // if type is pure generic recovering parametrization
-            analyzingType = declaredGeneric((TypeVariable) type, generics);
+            analyzingType = declaredGeneric((TypeVariable) type, generics, tracer);
         }
         if ((analyzingType instanceof ParameterizedType)
                 && ((ParameterizedType) analyzingType).getActualTypeArguments().length > 0) {
@@ -97,7 +125,7 @@ public final class GenericsUtils {
             // if type is class return raw declaration
             final Class<?> actual = (Class<?>) analyzingType;
             if (actual.getTypeParameters().length > 0) {
-                res = GenericsResolutionUtils.resolveDirectRawGenerics(actual)
+                res = GenericsResolutionUtils.resolveDirectRawGenerics(actual, tracer)
                         .values().toArray(new Type[0]);
             }
         }
@@ -116,13 +144,27 @@ public final class GenericsUtils {
      * @throws UnknownGenericException when found generic not declared on type (e.g. method generic)
      */
     public static List<Class<?>> resolveGenericsOf(final Type type, final Map<String, Type> generics) {
-        final Type[] typeGenerics = getGenerics(type, generics);
+        return resolveGenericsOf(type, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveGenericsOf(Type, Map)}.
+     *
+     * @param type     type to analyze
+     * @param generics root class generics mapping
+     * @param tracer   resolution tracer
+     * @return resolved generic classes or empty list if type does not support generics
+     * @throws UnknownGenericException when found generic not declared on type (e.g. method generic)
+     */
+    public static List<Class<?>> resolveGenericsOf(final Type type, final Map<String, Type> generics,
+                                                   final ResolutionTracer tracer) {
+        final Type[] typeGenerics = getGenerics(type, generics, tracer);
         if (typeGenerics.length == 0) {
             return Collections.emptyList();
         }
         final List<Class<?>> res = new ArrayList<>();
         for (Type gen : typeGenerics) {
-            res.add(resolveClass(gen, generics));
+            res.add(resolveClass(gen, generics, tracer));
         }
         return res;
     }
@@ -169,21 +211,35 @@ public final class GenericsUtils {
      * @see #resolveClassIgnoringVariables(Type) shortcut to resolve class ignoring passible variables
      */
     public static Class<?> resolveClass(final Type type, final Map<String, Type> generics) {
+        return resolveClass(type, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveClass(Type, Map)}.
+     *
+     * @param type     type to resolve
+     * @param generics root class generics mapping
+     * @param tracer   resolution tracer
+     * @return resolved class
+     * @throws UnknownGenericException when found generic not declared on type (e.g. method generic)
+     */
+    public static Class<?> resolveClass(final Type type, final Map<String, Type> generics,
+                                        final ResolutionTracer tracer) {
         final Class<?> res;
         if (type instanceof Class) {
             res = (Class) type;
         } else if (type instanceof ExplicitTypeVariable) {
-            res = resolveClass(((ExplicitTypeVariable) type).getBounds()[0], generics);
+            res = resolveClass(((ExplicitTypeVariable) type).getBounds()[0], generics, tracer);
         } else if (type instanceof ParameterizedType) {
-            res = resolveClass(((ParameterizedType) type).getRawType(), generics);
+            res = resolveClass(((ParameterizedType) type).getRawType(), generics, tracer);
         } else if (type instanceof TypeVariable) {
-            res = resolveClass(declaredGeneric((TypeVariable) type, generics), generics);
+            res = resolveClass(declaredGeneric((TypeVariable) type, generics, tracer), generics, tracer);
         } else if (type instanceof WildcardType) {
             final Type[] upperBounds = ((WildcardType) type).getUpperBounds();
-            res = resolveClass(upperBounds[0], generics);
+            res = resolveClass(upperBounds[0], generics, tracer);
         } else {
             res = ArrayTypeUtils.toArrayClass(
-                    resolveClass(((GenericArrayType) type).getGenericComponentType(), generics));
+                    resolveClass(((GenericArrayType) type).getGenericComponentType(), generics, tracer));
         }
         return res;
     }
@@ -199,9 +255,22 @@ public final class GenericsUtils {
      * @return list of resolved types classes
      */
     public static List<Class<?>> resolveClasses(final Type[] types, final Map<String, Type> generics) {
+        return resolveClasses(types, generics, ResolutionTracer.NONE);
+    }
+
+    /**
+     * Tracing version of {@link #resolveClasses(Type[], Map)}.
+     *
+     * @param types    types to resolve
+     * @param generics type generics
+     * @param tracer   resolution tracer
+     * @return list of resolved types classes
+     */
+    public static List<Class<?>> resolveClasses(final Type[] types, final Map<String, Type> generics,
+                                                final ResolutionTracer tracer) {
         final List<Class<?>> params = new ArrayList<>();
         for (Type type : types) {
-            params.add(resolveClass(type, generics));
+            params.add(resolveClass(type, generics, tracer));
         }
         return params;
     }
@@ -289,6 +358,20 @@ public final class GenericsUtils {
     }
 
     /**
+     * Tracing version of {@link #resolveTypeVariables(Type, Map)}.
+     *
+     * @param type     type to resolve
+     * @param generics root class generics mapping
+     * @param tracer   resolution tracer
+     * @return resolved type
+     * @throws UnknownGenericException when found generic not declared on type (e.g. method generic)
+     */
+    public static Type resolveTypeVariables(final Type type, final Map<String, Type> generics,
+                                            final ResolutionTracer tracer) {
+        return resolveTypeVariables(type, generics, false, tracer);
+    }
+
+    /**
      * Shortcut for {@link #resolveTypeVariables(Type, Map)} to process multiple types at once.
      *
      * @param types    types to replace named generics in
@@ -300,33 +383,56 @@ public final class GenericsUtils {
         return resolveTypeVariables(types, generics, false);
     }
 
+    /**
+     * Tracing version of {@link #resolveTypeVariables(Type[], Map)}.
+     *
+     * @param types    types to replace named generics in
+     * @param generics known generics
+     * @param tracer   resolution tracer
+     * @return types without named generics
+     */
+    public static Type[] resolveTypeVariables(final Type[] types, final Map<String, Type> generics,
+                                              final ResolutionTracer tracer) {
+        return resolveTypeVariables(types, generics, false, tracer);
+    }
+
+    // for TypeVariableUtils access
+    @SuppressWarnings("PMD.AvoidProtectedMethodInFinalClassNotExtending")
+    protected static Type resolveTypeVariables(final Type type,
+                                               final Map<String, Type> generics,
+                                               final boolean countPreservedVariables) {
+        return resolveTypeVariables(type, generics, countPreservedVariables, ResolutionTracer.NONE);
+    }
+
     // for TypeVariableUtils access
     @SuppressWarnings({"PMD.AvoidProtectedMethodInFinalClassNotExtending",
             "checkstyle:CyclomaticComplexity"})
     protected static Type resolveTypeVariables(final Type type,
                                                final Map<String, Type> generics,
-                                               final boolean countPreservedVariables) {
+                                               final boolean countPreservedVariables,
+                                               final ResolutionTracer tracer) {
         Type resolvedGenericType = null;
         if (type instanceof TypeVariable) {
             // simple named generics resolved to target types
-            resolvedGenericType = declaredGeneric((TypeVariable) type, generics);
+            resolvedGenericType = declaredGeneric((TypeVariable) type, generics, tracer);
         } else if (type instanceof ExplicitTypeVariable) {
             // special type used to preserve named generic (and differentiate from type variable)
-            resolvedGenericType = declaredGeneric((ExplicitTypeVariable) type, generics, countPreservedVariables);
+            resolvedGenericType = declaredGeneric((ExplicitTypeVariable) type, generics,
+                    countPreservedVariables, tracer);
         } else if (type instanceof Class) {
             resolvedGenericType = type;
         } else if (type instanceof ParameterizedType) {
             // here parameterized type could shrink to class (if it has no arguments and owner class)
             resolvedGenericType = resolveParameterizedTypeVariables(
-                    (ParameterizedType) type, generics, countPreservedVariables);
+                    (ParameterizedType) type, generics, countPreservedVariables, tracer);
         } else if (type instanceof GenericArrayType) {
             // here generic array could shrink to array class (if component type shrink to simple class)
             resolvedGenericType = resolveGenericArrayTypeVariables(
-                    (GenericArrayType) type, generics, countPreservedVariables);
+                    (GenericArrayType) type, generics, countPreservedVariables, tracer);
         } else if (type instanceof WildcardType) {
             // here wildcard could shrink to upper type (if it has only one upper type)
             resolvedGenericType = resolveWildcardTypeVariables(
-                    (WildcardType) type, generics, countPreservedVariables);
+                    (WildcardType) type, generics, countPreservedVariables, tracer);
         }
         return resolvedGenericType;
     }
@@ -336,12 +442,21 @@ public final class GenericsUtils {
     protected static Type[] resolveTypeVariables(final Type[] types,
                                                  final Map<String, Type> generics,
                                                  final boolean countPreservedVariables) {
+        return resolveTypeVariables(types, generics, countPreservedVariables, ResolutionTracer.NONE);
+    }
+
+    // for TypeVariableUtils access
+    @SuppressWarnings("PMD.AvoidProtectedMethodInFinalClassNotExtending")
+    protected static Type[] resolveTypeVariables(final Type[] types,
+                                                 final Map<String, Type> generics,
+                                                 final boolean countPreservedVariables,
+                                                 final ResolutionTracer tracer) {
         if (types.length == 0) {
             return NO_TYPES;
         }
         final Type[] resolved = new Type[types.length];
         for (int i = 0; i < types.length; i++) {
-            resolved[i] = resolveTypeVariables(types[i], generics, countPreservedVariables);
+            resolved[i] = resolveTypeVariables(types[i], generics, countPreservedVariables, tracer);
         }
         return resolved;
     }
@@ -633,10 +748,19 @@ public final class GenericsUtils {
         return result;
     }
 
+    private static Type declaredGeneric(final TypeVariable generic,
+                                        final Map<String, Type> declarations,
+                                        final ResolutionTracer tracer) {
+        final Type result = declaredGeneric(generic, declarations);
+        tracer.substitute(generic, result);
+        return result;
+    }
+
     private static Type declaredGeneric(final ExplicitTypeVariable generic,
                                         final Map<String, Type> declarations,
-                                        final boolean resolve) {
-        return resolve ? declaredGeneric(generic.getDeclarationSource(), declarations) : generic;
+                                        final boolean resolve,
+                                        final ResolutionTracer tracer) {
+        return resolve ? declaredGeneric(generic.getDeclarationSource(), declarations, tracer) : generic;
     }
 
     /**
@@ -652,7 +776,8 @@ public final class GenericsUtils {
      */
     private static Type resolveParameterizedTypeVariables(final ParameterizedType type,
                                                           final Map<String, Type> generics,
-                                                          final boolean countPreservedVariables) {
+                                                          final boolean countPreservedVariables,
+                                                          final ResolutionTracer tracer) {
 
         final boolean emptyContainerForClass = type.getActualTypeArguments().length == 0
                 && type.getOwnerType() == null;
@@ -661,11 +786,16 @@ public final class GenericsUtils {
                     // some outer class generics could be hidden by inner class generics (same name)
                     // so need IgnoreGenericsMap to use Object instead (besides these hidden generics
                     // does not influence for sure inner type)
-                    new IgnoreGenericsMap(extractOwnerGenerics((Class) type.getRawType(), generics)))
+                    new IgnoreGenericsMap(extractOwnerGenerics((Class) type.getRawType(), generics)), tracer)
                 : null;
+        if (owner != null) {
+            // owner type generics passed to inner type
+            tracer.ownerType(owner);
+        }
         return emptyContainerForClass ? type.getRawType()
                 : new ParameterizedTypeImpl(type.getRawType(),
-                resolveTypeVariables(type.getActualTypeArguments(), generics, countPreservedVariables), owner);
+                resolveTypeVariables(type.getActualTypeArguments(), generics, countPreservedVariables, tracer),
+                owner);
     }
 
     /**
@@ -683,20 +813,26 @@ public final class GenericsUtils {
      */
     private static Type resolveWildcardTypeVariables(final WildcardType type,
                                                      final Map<String, Type> generics,
-                                                     final boolean countPreservedVariables) {
+                                                     final boolean countPreservedVariables,
+                                                     final ResolutionTracer tracer) {
         final Type res;
         if (type.getLowerBounds().length > 0) {
             // only one lower bound could be (? super A)
             final Type lowerBound = resolveTypeVariables(
-                    type.getLowerBounds(), generics, countPreservedVariables)[0];
+                    type.getLowerBounds(), generics, countPreservedVariables, tracer)[0];
             // flatten <? super Object> to Object
             res = lowerBound == Object.class
                     ? Object.class : WildcardTypeImpl.lower(lowerBound);
         } else {
             // could be multiple upper bounds because of named generic bounds repackage (T extends A & B)
-            final Type[] upperBounds = resolveTypeVariables(type.getUpperBounds(), generics, countPreservedVariables);
+            final Type[] upperBounds = resolveTypeVariables(
+                    type.getUpperBounds(), generics, countPreservedVariables, tracer);
             // flatten <? extends Object> (<?>) to Object and <? extends Something> to Something
             res = upperBounds.length == 1 ? upperBounds[0] : WildcardTypeImpl.upper(upperBounds);
+        }
+        if (!(res instanceof WildcardType)) {
+            // wildcard narrowed to bound type
+            tracer.boundNarrowed(type, res);
         }
         return res;
     }
@@ -712,9 +848,10 @@ public final class GenericsUtils {
      */
     private static Type resolveGenericArrayTypeVariables(final GenericArrayType type,
                                                          final Map<String, Type> generics,
-                                                         final boolean countPreservedVariables) {
+                                                         final boolean countPreservedVariables,
+                                                         final ResolutionTracer tracer) {
         final Type componentType = resolveTypeVariables(
-                type.getGenericComponentType(), generics, countPreservedVariables);
+                type.getGenericComponentType(), generics, countPreservedVariables, tracer);
         return ArrayTypeUtils.toArrayType(componentType);
     }
 }

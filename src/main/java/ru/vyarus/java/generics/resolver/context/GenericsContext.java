@@ -1,6 +1,7 @@
 package ru.vyarus.java.generics.resolver.context;
 
 import ru.vyarus.java.generics.resolver.error.WrongGenericsContextException;
+import ru.vyarus.java.generics.resolver.error.GenericsException;
 import ru.vyarus.java.generics.resolver.util.GenericInfoUtils;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
@@ -140,7 +141,12 @@ public class GenericsContext extends AbstractGenericsContext {
 
     @Override
     public GenericsContext type(final Class<?> type) {
-        return type == currentType ? this : new GenericsContext(genericsInfo, TypeUtils.wrapPrimitive(type), root);
+        if (type == currentType) {
+            return this;
+        }
+        final GenericsContext res = new GenericsContext(genericsInfo, TypeUtils.wrapPrimitive(type), root);
+        res.setTracer(tracer);
+        return res;
     }
 
     @Override
@@ -148,7 +154,7 @@ public class GenericsContext extends AbstractGenericsContext {
         // no need for switch, just for more concrete error message
         final GenericsContext context = switchContext(method.getDeclaringClass(),
                 String.format("Method '%s'", TypeToStringUtils.toStringMethod(method, PRINTABLE_GENERICS)));
-        return new MethodGenericsContext(context.genericsInfo, method, root);
+        return new MethodGenericsContext(context.genericsInfo, method, root, context.tracer);
     }
 
     @Override
@@ -157,50 +163,80 @@ public class GenericsContext extends AbstractGenericsContext {
         final GenericsContext context = switchContext(constructor.getDeclaringClass(),
                 String.format("Constructor '%s'",
                         TypeToStringUtils.toStringConstructor(constructor, PRINTABLE_GENERICS)));
-        return new ConstructorGenericsContext(context.genericsInfo, constructor, root);
+        return new ConstructorGenericsContext(context.genericsInfo, constructor, root, context.tracer);
     }
 
     @Override
     public GenericsContext inlyingType(final Type type) {
-        // check type compatibility
-        final GenericsContext root = chooseContext(type);
-        // always wrap primitive because context may be build only for real class (it would require too much
-        // of additional checks to properly support primitive-based contexts; usually it could be easilly
-        // checked manually)
-        final Class target = TypeUtils.wrapPrimitive(root.resolveClass(type));
-        final GenericsInfo generics;
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                tracer.readType(type);
+            }
+            // check type compatibility
+            final GenericsContext root = chooseContext(type);
+            // always wrap primitive because context may be build only for real class (it would require too much
+            // of additional checks to properly support primitive-based contexts; usually it could be easilly
+            // checked manually)
+            final Class target = TypeUtils.wrapPrimitive(root.resolveClass(type));
+            final GenericsInfo generics;
 
-        if (target.getTypeParameters().length > 0 || couldRequireKnownOuterGenerics(root, type)) {
-            // resolve class hierarchy in context (non cachable context)
-            // can't be primitive here
-            generics = GenericInfoUtils.create(root, type, genericsInfo.getIgnoredTypes());
-        } else {
-            // class without generics - use cachable context
-            generics = GenericsInfoFactory.create(target, genericsInfo.getIgnoredTypes());
+            if (target.getTypeParameters().length > 0 || couldRequireKnownOuterGenerics(root, type)) {
+                if (TypeUtils.getOuter(type) != null) {
+                    // outer class generics will be used from current hierarchy
+                    tracer.ownerType(TypeUtils.getOuter(type));
+                }
+                // resolve class hierarchy in context (non cachable context)
+                // can't be primitive here
+                generics = GenericInfoUtils.create(root, type, genericsInfo.getIgnoredTypes());
+            } else {
+                // class without generics - use cachable context
+                generics = GenericsInfoFactory.create(target, tracer, genericsInfo.getIgnoredTypes());
+            }
+
+            final GenericsContext res = new GenericsContext(generics, target, root);
+            res.setTracer(tracer);
+            tracer.result(target);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
         }
-
-        return new GenericsContext(generics, target, root);
     }
 
     @Override
     public GenericsContext inlyingTypeAs(final Type type, final Class<?> asType) {
-        // check type compatibility
-        final GenericsContext root = chooseContext(type);
-        // always wrap primitive because context may be build only for real class (it would require too much
-        // of additional checks to properly support primitive-based contexts; usually it could be easilly
-        // checked manually)
-        final Class target = TypeUtils.wrapPrimitive(root.resolveClass(type));
-        final GenericsInfo generics;
-        if (target.getTypeParameters().length > 0
-                || couldRequireKnownOuterGenerics(root, type) || couldRequireKnownOuterGenerics(root, asType)) {
-            // resolve class hierarchy in context and from higher type (non cachable context)
-            // can't be primitive
-            generics = GenericInfoUtils.create(root, type, asType, genericsInfo.getIgnoredTypes());
-        } else {
-            // class without generics - use cachable context
-            generics = GenericsInfoFactory.create(asType, genericsInfo.getIgnoredTypes());
+        try {
+            traceOwnScope();
+            if (tracer.isRecording()) {
+                tracer.readType(type);
+            }
+            // check type compatibility
+            final GenericsContext root = chooseContext(type);
+            // always wrap primitive because context may be build only for real class (it would require too much
+            // of additional checks to properly support primitive-based contexts; usually it could be easilly
+            // checked manually)
+            final Class target = TypeUtils.wrapPrimitive(root.resolveClass(type));
+            final GenericsInfo generics;
+            if (target.getTypeParameters().length > 0
+                    || couldRequireKnownOuterGenerics(root, type) || couldRequireKnownOuterGenerics(root, asType)) {
+                if (TypeUtils.getOuter(type) != null) {
+                    // outer class generics will be used from current hierarchy
+                    tracer.ownerType(TypeUtils.getOuter(type));
+                }
+                // resolve class hierarchy in context and from higher type (non cachable context)
+                // can't be primitive
+                generics = GenericInfoUtils.create(root, type, asType, genericsInfo.getIgnoredTypes());
+            } else {
+                // class without generics - use cachable context
+                generics = GenericsInfoFactory.create(asType, tracer, genericsInfo.getIgnoredTypes());
+            }
+            final GenericsContext res = new GenericsContext(generics, asType, root);
+            res.setTracer(tracer);
+            tracer.result(asType);
+            return res;
+        } catch (GenericsException ex) {
+            throw traceError(ex);
         }
-        return new GenericsContext(generics, asType, root);
     }
 
     @Override

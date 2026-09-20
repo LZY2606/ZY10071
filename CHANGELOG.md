@@ -1,3 +1,7 @@
+* Add resolution trace (disabled by default): context.enableTracing() records resolution events
+    (declaration scope, read types, variable substitutions, bound narrowing, owner types passing,
+    cache hits and final values); immutable trace is available with context.getTrace() and,
+    in case of failure, from GenericsException.getResolutionTrace()
 * (breaking) Drop java 6,7 support
 * Add ArrayTypeUtils with operations on array types
 * Add TypeVariableUtils for working with type templates (with preserved variables)
