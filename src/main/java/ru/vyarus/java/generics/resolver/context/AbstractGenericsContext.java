@@ -4,6 +4,10 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import ru.vyarus.java.generics.resolver.error.UnknownGenericException;
 import ru.vyarus.java.generics.resolver.error.WrongGenericsContextException;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
+import ru.vyarus.java.generics.resolver.trace.ResolutionTrace;
+import ru.vyarus.java.generics.resolver.trace.ResolutionTracer;
+import ru.vyarus.java.generics.resolver.trace.TraceScope;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
 
 import java.lang.reflect.*;
@@ -255,6 +259,85 @@ public abstract class AbstractGenericsContext {
     }
 
     /**
+     * Enables resolution trace recording for subsequent calls performed with this context on the current
+     * thread. Tracing is off by default and must be explicitly opted in.
+     * <p>
+     * The returned tracer is bound to the current thread only: concurrent resolutions on other threads
+     * (or with other contexts) are not affected and could never mix scopes.
+     * <p>
+     * Typical usage:
+     * <pre>{@code
+     * ResolutionTracer tracer = context.startTracing();
+     * try {
+     *     Class<?> res = context.resolveClass(type);
+     *     ResolutionTrace trace = tracer.finish(res);
+     * } } catch (RuntimeException ex) {
+     *     ResolutionTrace trace = ResolutionTracer.traceOf(ex); // or tracer.fail(ex)
+     * } finally {
+     *     tracer.stop();
+     * }
+     * }</pre>
+     *
+     * @return active tracer bound to the current thread
+     * @throws IllegalStateException if tracing is already active on the thread
+     * @see ResolutionTracer
+     * @see TraceSupport#traceOf(Throwable)
+     */
+    public ResolutionTracer startTracing() {
+        final ResolutionTracer tracer = ResolutionTracer.start();
+        TraceSupport.scope(buildTraceScope());
+        return tracer;
+    }
+
+    /**
+     * Stops active tracing session (started on this context) and unbinds it from the current thread.
+     * Already recorded events remain available.
+     */
+    public void stopTracing() {
+        final ResolutionTracer tracer = ResolutionTracer.active();
+        if (tracer != null) {
+            tracer.stop();
+        }
+    }
+
+    /**
+     * @return immutable snapshot of currently recorded trace (useful mid resolution) or null if tracing off
+     */
+    public ResolutionTrace trace() {
+        final ResolutionTracer tracer = ResolutionTracer.active();
+        return tracer == null ? null : tracer.snapshot();
+    }
+
+    /**
+     * Builds immutable scope snapshot for tracing. Overridden in method and constructor contexts to
+     * include member declaration and member specific generics.
+     *
+     * @return trace scope description
+     */
+    protected TraceScope buildTraceScope() {
+        return new TraceScope(getGenericsScope(), currentType, getGenericsSource(), contextGenerics());
+    }
+
+    /**
+     * Marks current scope as active for tracing (used by context navigation: type, method, constructor).
+     */
+    protected void activateTraceScope() {
+        final ResolutionTracer tracer = ResolutionTracer.active();
+        if (tracer != null) {
+            TraceSupport.scope(buildTraceScope());
+        }
+    }
+
+    /**
+     * Re-emits current declaration scope into the active trace. Useful when the same context instance is
+     * reused after other resolutions happened on the thread, so subsequent events snapshot correct scope.
+     * Does nothing when tracing is off.
+     */
+    public void enterActiveScope() {
+        activateTraceScope();
+    }
+
+    /**
      * Useful for introspection to know exact class of type.
      * <pre>{@code class A extends B<Long>;
      * class B<T> {
@@ -276,7 +359,16 @@ public abstract class AbstractGenericsContext {
      * @throws WrongGenericsContextException if type contains generics not visible from current class
      */
     public Class<?> resolveClass(final Type type) {
-        return GenericsUtils.resolveClass(type, chooseContext(type).contextGenerics());
+        TraceSupport.read(type);
+        final GenericsContext context = chooseContext(type);
+        try {
+            final Class<?> res = GenericsUtils.resolveClass(type, context.contextGenerics());
+            TraceSupport.complete(res);
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -320,7 +412,16 @@ public abstract class AbstractGenericsContext {
      * @see #resolveTypeGenerics(Type) if complete types are required
      */
     public List<Class<?>> resolveGenericsOf(final Type type) {
-        return GenericsUtils.resolveGenericsOf(type, chooseContext(type).contextGenerics());
+        TraceSupport.read(type);
+        final GenericsContext context = chooseContext(type);
+        try {
+            final List<Class<?>> res = GenericsUtils.resolveGenericsOf(type, context.contextGenerics());
+            TraceSupport.complete(res.isEmpty() ? null : res.get(0));
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -414,7 +515,16 @@ public abstract class AbstractGenericsContext {
      * @see GenericsUtils#resolveTypeVariables(Type, Map) for implementation details
      */
     public Type resolveType(final Type type) {
-        return GenericsUtils.resolveTypeVariables(type, chooseContext(type).contextGenerics());
+        TraceSupport.read(type);
+        final GenericsContext context = chooseContext(type);
+        try {
+            final Type res = GenericsUtils.resolveTypeVariables(type, context.contextGenerics());
+            TraceSupport.complete(res);
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -438,9 +548,17 @@ public abstract class AbstractGenericsContext {
      * @see #resolveGenericsOf(Type) if just classes required
      */
     public List<Type> resolveTypeGenerics(final Type type) {
+        TraceSupport.read(type);
         final Map<String, Type> generics = chooseContext(type).contextGenerics();
-        return Arrays.asList(
-                GenericsUtils.resolveTypeVariables(GenericsUtils.getGenerics(type, generics), generics));
+        try {
+            final List<Type> res = Arrays.asList(
+                    GenericsUtils.resolveTypeVariables(GenericsUtils.getGenerics(type, generics), generics));
+            TraceSupport.complete(res.isEmpty() ? null : res.get(0));
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -461,7 +579,16 @@ public abstract class AbstractGenericsContext {
      * @throws WrongGenericsContextException if type contains generics not visible from current class
      */
     public String toStringType(final Type type) {
-        return TypeToStringUtils.toStringType(type, chooseContext(type).contextGenerics());
+        TraceSupport.read(type);
+        final GenericsContext context = chooseContext(type);
+        try {
+            final String res = TypeToStringUtils.toStringType(type, context.contextGenerics());
+            TraceSupport.complete(type);
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -689,7 +816,10 @@ public abstract class AbstractGenericsContext {
 
     private String checkGenericName(final String genericName) {
         if (!contextGenerics().containsKey(genericName)) {
-            throw new UnknownGenericException(currentType, genericName, null);
+            final UnknownGenericException ex =
+                    new UnknownGenericException(currentType, genericName, null);
+            TraceSupport.recordFailure(ex);
+            throw ex;
         }
         return genericName;
     }

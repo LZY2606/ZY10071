@@ -4,6 +4,7 @@ import ru.vyarus.java.generics.resolver.context.container.WildcardTypeImpl;
 import ru.vyarus.java.generics.resolver.error.GenericsResolutionException;
 import ru.vyarus.java.generics.resolver.error.IncompatibleTypesException;
 import ru.vyarus.java.generics.resolver.error.UnknownGenericException;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.type.TypeLiteral;
 import ru.vyarus.java.generics.resolver.util.map.EmptyGenericsMap;
 import ru.vyarus.java.generics.resolver.util.map.IgnoreGenericsMap;
@@ -113,7 +114,11 @@ public final class GenericsResolutionUtils {
         try {
             analyzeType(generics, type, knownGenerics, ignoreClasses);
         } catch (Exception ex) {
-            throw new GenericsResolutionException(type, rootGenerics, knownGenerics, ex);
+            final GenericsResolutionException wrapped =
+                    new GenericsResolutionException(type, rootGenerics, knownGenerics, ex);
+            // associates both wrapped exception and its cause with the pre-termination trace
+            TraceSupport.recordFailure(wrapped);
+            throw wrapped;
         }
         return generics;
     }
@@ -321,6 +326,11 @@ public final class GenericsResolutionUtils {
             for (TypeVariable var : GenericsUtils.resolveClass(type, generics).getTypeParameters()) {
                 outerGenerics.remove(var.getName());
             }
+            if (!outerGenerics.isEmpty()) {
+                TraceSupport.ownerTransfer(outer instanceof ParameterizedType
+                        ? ((ParameterizedType) outer).getRawType()
+                        : GenericsUtils.resolveClass(outer, generics), outerGenerics.toString());
+            }
 
             if (generics instanceof EmptyGenericsMap) {
                 // if outer map is empty then it was assumed that empty map could be returned
@@ -474,13 +484,17 @@ public final class GenericsResolutionUtils {
             final Type currentValue = main.get(generic);
 
             if (TypeUtils.isCompatible(value, currentValue)) {
-                main.put(generic, TypeUtils.getMoreSpecificType(value, currentValue));
+                final Type merged = TypeUtils.getMoreSpecificType(value, currentValue);
+                TraceSupport.narrow(generic, currentValue, merged);
+                main.put(generic, merged);
             } else {
                 // all variables already replaces, so no actual generics required
-                throw new IncompatibleTypesException(String.format(
+                final IncompatibleTypesException ex = new IncompatibleTypesException(String.format(
                         "Interface %s appears multiple times in root class hierarchy with incompatible "
                                 + "parametrization for generic %s: %%s and %%s",
                         TypeToStringUtils.toStringWithNamedGenerics(type), generic), currentValue, value);
+                TraceSupport.recordFailure(ex);
+                throw ex;
             }
         }
     }

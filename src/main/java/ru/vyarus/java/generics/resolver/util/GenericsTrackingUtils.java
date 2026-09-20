@@ -4,6 +4,7 @@ import ru.vyarus.java.generics.resolver.GenericsResolver;
 import ru.vyarus.java.generics.resolver.context.GenericsContext;
 import ru.vyarus.java.generics.resolver.context.container.ExplicitTypeVariable;
 import ru.vyarus.java.generics.resolver.context.container.WildcardTypeImpl;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.error.GenericsTrackingException;
 import ru.vyarus.java.generics.resolver.error.IncompatibleTypesException;
 import ru.vyarus.java.generics.resolver.util.map.EmptyGenericsMap;
@@ -49,9 +50,17 @@ public final class GenericsTrackingUtils {
         }
 
         try {
-            return trackGenerics(type, known, knownGenerics);
-        } catch (Exception ex) {
-            throw new GenericsTrackingException(type, known, knownGenerics, ex);
+            final LinkedHashMap<String, Type> res = trackGenerics(type, known, knownGenerics);
+            for (Map.Entry<String, Type> entry : res.entrySet()) {
+                TraceSupport.track(entry.getKey(), entry.getValue());
+            }
+            return res;
+        } catch (RuntimeException ex) {
+            final GenericsTrackingException wrapped =
+                    new GenericsTrackingException(type, known, knownGenerics, ex);
+            // associates both wrapped exception and its cause with the pre-termination trace
+            TraceSupport.recordFailure(wrapped);
+            throw wrapped;
         }
     }
 
@@ -245,11 +254,13 @@ public final class GenericsTrackingUtils {
                                                 final Class<?> root,
                                                 final Class<?> known) {
         if (!TypeUtils.isCompatible(actualType, knownType)) {
-            throw new IncompatibleTypesException(String.format(
+            final IncompatibleTypesException ex = new IncompatibleTypesException(String.format(
                     "Known generic %s of %s is not compatible with %s hierarchy: %%s when required %%s",
                     genericName, TypeToStringUtils.toStringWithNamedGenerics(known),
                     TypeToStringUtils.toStringType(root)),
                     knownType, actualType);
+            TraceSupport.recordFailure(ex);
+            throw ex;
         }
     }
 

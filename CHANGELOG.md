@@ -1,3 +1,15 @@
+### 3.1.0
+
+* Add opt-in resolution trace (`ru.vyarus.java.generics.resolver.trace`)
+    - Trace declaration scopes (class, method, constructor), read types, variable substitutions,
+      bounds narrowing, owner (inner class) generics transfer, inlying contexts, generic tracking,
+      context switches, cache hits and terminal value/failure
+    - Disabled by default: zero allocation on hot path when off (single thread local check)
+    - Immutable trace result, stable text rendering with recursion-safe type reference numbers
+    - Failure trace safely obtainable from thrown exception (including wrapped exceptions),
+      without changing exception message or stack trace
+    - Thread local sessions; cached descriptors reused by different contexts never mix caller scopes
+
 * (breaking) Drop java 6,7 support
 * Add ArrayTypeUtils with operations on array types
 * Add TypeVariableUtils for working with type templates (with preserved variables)

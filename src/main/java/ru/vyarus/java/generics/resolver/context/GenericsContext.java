@@ -1,6 +1,7 @@
 package ru.vyarus.java.generics.resolver.context;
 
 import ru.vyarus.java.generics.resolver.error.WrongGenericsContextException;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.GenericInfoUtils;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
@@ -140,7 +141,10 @@ public class GenericsContext extends AbstractGenericsContext {
 
     @Override
     public GenericsContext type(final Class<?> type) {
-        return type == currentType ? this : new GenericsContext(genericsInfo, TypeUtils.wrapPrimitive(type), root);
+        final GenericsContext res = type == currentType
+                ? this : new GenericsContext(genericsInfo, TypeUtils.wrapPrimitive(type), root);
+        res.activateTraceScope();
+        return res;
     }
 
     @Override
@@ -148,7 +152,9 @@ public class GenericsContext extends AbstractGenericsContext {
         // no need for switch, just for more concrete error message
         final GenericsContext context = switchContext(method.getDeclaringClass(),
                 String.format("Method '%s'", TypeToStringUtils.toStringMethod(method, PRINTABLE_GENERICS)));
-        return new MethodGenericsContext(context.genericsInfo, method, root);
+        final MethodGenericsContext res = new MethodGenericsContext(context.genericsInfo, method, root);
+        res.activateTraceScope();
+        return res;
     }
 
     @Override
@@ -157,7 +163,10 @@ public class GenericsContext extends AbstractGenericsContext {
         final GenericsContext context = switchContext(constructor.getDeclaringClass(),
                 String.format("Constructor '%s'",
                         TypeToStringUtils.toStringConstructor(constructor, PRINTABLE_GENERICS)));
-        return new ConstructorGenericsContext(context.genericsInfo, constructor, root);
+        final ConstructorGenericsContext res =
+                new ConstructorGenericsContext(context.genericsInfo, constructor, root);
+        res.activateTraceScope();
+        return res;
     }
 
     @Override
@@ -179,7 +188,10 @@ public class GenericsContext extends AbstractGenericsContext {
             generics = GenericsInfoFactory.create(target, genericsInfo.getIgnoredTypes());
         }
 
-        return new GenericsContext(generics, target, root);
+        TraceSupport.inlying(target);
+        final GenericsContext res = new GenericsContext(generics, target, root);
+        res.activateTraceScope();
+        return res;
     }
 
     @Override
@@ -200,7 +212,10 @@ public class GenericsContext extends AbstractGenericsContext {
             // class without generics - use cachable context
             generics = GenericsInfoFactory.create(asType, genericsInfo.getIgnoredTypes());
         }
-        return new GenericsContext(generics, asType, root);
+        TraceSupport.inlying(asType);
+        final GenericsContext res = new GenericsContext(generics, asType, root);
+        res.activateTraceScope();
+        return res;
     }
 
     @Override
@@ -231,11 +246,16 @@ public class GenericsContext extends AbstractGenericsContext {
                                 context = type(target);
                                 break;
                         }
+                        TraceSupport.contextSwitch(target);
+                        TraceSupport.scope(context.buildTraceScope());
                         return context;
                     }
                 }
                 // can't switch - notify incompatible context
-                throw new WrongGenericsContextException(type, var, currentType, genericsInfo);
+                final WrongGenericsContextException ex =
+                        new WrongGenericsContextException(type, var, currentType, genericsInfo);
+                TraceSupport.recordFailure(ex);
+                throw ex;
             }
         }
         return this;
@@ -245,11 +265,17 @@ public class GenericsContext extends AbstractGenericsContext {
     protected GenericsContext switchContext(final Class target, final String msgPrefix) {
         try {
             // switch context to avoid silly mistakes (will fail if declaring type is not in hierarchy)
-            return type(target);
+            final GenericsContext res = type(target);
+            if (target != currentType) {
+                TraceSupport.contextSwitch(target);
+            }
+            return res;
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException(String.format(
+            final IllegalArgumentException wrapped = new IllegalArgumentException(String.format(
                     msgPrefix + " declaration type %s is not present in current hierarchy:%n%s",
                     TypeToStringUtils.toStringType(target), genericsInfo.toString()), ex);
+            TraceSupport.recordFailure(wrapped);
+            throw wrapped;
         }
     }
 
@@ -279,6 +305,7 @@ public class GenericsContext extends AbstractGenericsContext {
             for (String key : ownerGenerics.keySet()) {
                 typeGenerics.remove(key);
             }
+            TraceSupport.ownerTransfer(ownerType, ownerGenerics.toString());
         }
     }
 

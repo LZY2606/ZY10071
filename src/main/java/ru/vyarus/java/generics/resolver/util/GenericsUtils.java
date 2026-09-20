@@ -7,6 +7,7 @@ import ru.vyarus.java.generics.resolver.context.container.WildcardTypeImpl;
 import ru.vyarus.java.generics.resolver.error.UnknownGenericException;
 import ru.vyarus.java.generics.resolver.util.map.EmptyGenericsMap;
 import ru.vyarus.java.generics.resolver.util.map.IgnoreGenericsMap;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.type.TrackedTypeFactory;
 
 import java.lang.reflect.*;
@@ -18,7 +19,7 @@ import java.util.*;
  * @author Vyacheslav Rusakov
  * @since 17.10.2014
  */
-@SuppressWarnings({"PMD.GodClass", "PMD.TooManyMethods", "PMD.CyclomaticComplexity", "PMD.LooseCoupling",
+@SuppressWarnings({"PMD.GodClass", "PMD.TooManyMethods", "PMD.CyclomaticComplexity", "PMD.LooseCoupling", "PMD.CompareObjectsWithEquals",
         "checkstyle:IllegalIdentifierName"})
 public final class GenericsUtils {
 
@@ -628,7 +629,13 @@ public final class GenericsUtils {
         final String name = generic.getName();
         final Type result = declarations.get(name);
         if (result == null) {
-            throw new UnknownGenericException(name, generic.getGenericDeclaration());
+            final UnknownGenericException ex =
+                    new UnknownGenericException(name, generic.getGenericDeclaration());
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
+        if (!(result instanceof TypeVariable) || result instanceof ExplicitTypeVariable) {
+            TraceSupport.substitute(name, generic, result);
         }
         return result;
     }
@@ -687,16 +694,30 @@ public final class GenericsUtils {
         final Type res;
         if (type.getLowerBounds().length > 0) {
             // only one lower bound could be (? super A)
+            final Type declaredLower = type.getLowerBounds()[0];
             final Type lowerBound = resolveTypeVariables(
                     type.getLowerBounds(), generics, countPreservedVariables)[0];
+            if (lowerBound != declaredLower) {
+                TraceSupport.narrow(null, declaredLower, lowerBound);
+            }
             // flatten <? super Object> to Object
-            res = lowerBound == Object.class
-                    ? Object.class : WildcardTypeImpl.lower(lowerBound);
+            if (lowerBound == Object.class) {
+                TraceSupport.narrow(null, type, Object.class);
+                res = Object.class;
+            } else {
+                res = WildcardTypeImpl.lower(lowerBound);
+            }
         } else {
             // could be multiple upper bounds because of named generic bounds repackage (T extends A & B)
             final Type[] upperBounds = resolveTypeVariables(type.getUpperBounds(), generics, countPreservedVariables);
             // flatten <? extends Object> (<?>) to Object and <? extends Something> to Something
-            res = upperBounds.length == 1 ? upperBounds[0] : WildcardTypeImpl.upper(upperBounds);
+            if (upperBounds.length == 1) {
+                res = upperBounds[0];
+            } else {
+                final Type merged = WildcardTypeImpl.upper(upperBounds);
+                TraceSupport.narrow(null, type, merged);
+                res = merged;
+            }
         }
         return res;
     }

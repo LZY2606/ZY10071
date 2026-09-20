@@ -1,5 +1,6 @@
 package ru.vyarus.java.generics.resolver.context;
 
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.GenericInfoUtils;
 
 import java.util.ConcurrentModificationException;
@@ -46,12 +47,16 @@ public final class GenericsInfoFactory {
     public static GenericsInfo create(final Class<?> type, final Class<?>... ignoreClasses) {
         GenericsInfo descriptor = ignoreClasses.length > 0
                 ? GenericInfoUtils.create(type, ignoreClasses) : CACHE.get(type);
+        if (descriptor != null) {
+            TraceSupport.cacheHit(type);
+        }
         if (descriptor == null) {
             LOCK.lock();
             try {
                 if (CACHE.get(type) != null) {
                     // descriptor could be created while thread wait for lock
                     descriptor = CACHE.get(type);
+                    TraceSupport.cacheHit(type);
                 } else {
                     descriptor = GenericInfoUtils.create(type);
                     if (isCacheEnabled()) {

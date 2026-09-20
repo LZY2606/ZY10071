@@ -1,5 +1,7 @@
 package ru.vyarus.java.generics.resolver.context;
 
+import ru.vyarus.java.generics.resolver.trace.TraceScope;
+import ru.vyarus.java.generics.resolver.trace.TraceSupport;
 import ru.vyarus.java.generics.resolver.util.GenericsResolutionUtils;
 import ru.vyarus.java.generics.resolver.util.GenericsUtils;
 import ru.vyarus.java.generics.resolver.util.TypeToStringUtils;
@@ -93,7 +95,18 @@ public class ConstructorGenericsContext extends GenericsContext {
      * @see #resolveParametersTypes()
      */
     public List<Class<?>> resolveParameters() {
-        return GenericsUtils.resolveClasses(ctor.getGenericParameterTypes(), contextGenerics());
+        for (Type param : ctor.getGenericParameterTypes()) {
+            TraceSupport.read(param);
+        }
+        try {
+            final List<Class<?>> res =
+                    GenericsUtils.resolveClasses(ctor.getGenericParameterTypes(), contextGenerics());
+            TraceSupport.complete(res.isEmpty() ? null : res.get(0));
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -113,8 +126,18 @@ public class ConstructorGenericsContext extends GenericsContext {
      * @see #resolveParameters()
      */
     public List<Type> resolveParametersTypes() {
-        return Arrays.asList(GenericsUtils.resolveTypeVariables(
-                ctor.getGenericParameterTypes(), contextGenerics()));
+        for (Type param : ctor.getGenericParameterTypes()) {
+            TraceSupport.read(param);
+        }
+        try {
+            final List<Type> res = Arrays.asList(GenericsUtils.resolveTypeVariables(
+                    ctor.getGenericParameterTypes(), contextGenerics()));
+            TraceSupport.complete(res.isEmpty() ? null : res.get(0));
+            return res;
+        } catch (RuntimeException ex) {
+            TraceSupport.recordFailure(ex);
+            throw ex;
+        }
     }
 
     /**
@@ -214,6 +237,11 @@ public class ConstructorGenericsContext extends GenericsContext {
     @Override
     protected Map<String, Type> contextGenerics() {
         return allGenerics;
+    }
+
+    @Override
+    protected TraceScope buildTraceScope() {
+        return new TraceScope(getGenericsScope(), currentType, ctor, contextGenerics());
     }
 
     @SuppressWarnings("unchecked")

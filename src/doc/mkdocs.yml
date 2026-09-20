@@ -114,6 +114,7 @@ nav:
       - Generics visibility: examples/visibility.md
   - User guide:
       - Context API: guide/context.md
+      - Resolution trace: guide/trace.md
       - Inlying contexts: guide/inlying.md
       - Cache: guide/cache.md
       - Low level API: guide/utils.md
